@@ -54,6 +54,9 @@ jobs:
       - name: Build Ghostty.app (full build — zig invokes xcodebuild)
         run: zig build -Doptimize=ReleaseFast
 
+      - name: Run tests
+        run: zig build test -Demit-macos-app=false
+
       - name: Locate and package .app
         run: |
           set -e
