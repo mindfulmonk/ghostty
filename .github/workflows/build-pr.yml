@@ -1,0 +1,75 @@
+name: Build Ghostty PR (kitty clipboard)
+
+on:
+  push:
+    branches: ['jarred/kitty-clipboard-read']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Single-job build on macos-26 using brew's patched zig@0.15.
+  #
+  # The Ghostty HACKING.md warns:
+  #   "Zig 0.15.x has a known linking issue with Xcode 26.4. If you are on
+  #    Xcode 26.4, you must use a Homebrew-installed Zig (brew install
+  #    zig@0.15) or our Nix flake, both of which contain a patch that works
+  #    around the issue."
+  #
+  # GitHub macos-26 runners have Xcode 26.5 (affected). brew zig@0.15 ships
+  # the patched libSystem.tbd handling that prebuilt Zig 0.15.2 lacks. With
+  # that, `zig build` does the entire build including invoking xcodebuild
+  # internally — matches the official ghostty.org/docs/install/build#macos
+  # recipe verbatim.
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode 26
+        run: |
+          set -e
+          XCODE=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE" ]; then
+            XCODE=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          fi
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install build deps
+        run: brew install gettext pandoc scdoc pkg-config zig@0.15
+
+      - name: Put zig@0.15 on PATH (keg-only formula)
+        run: echo "/opt/homebrew/opt/zig@0.15/bin" >> "$GITHUB_PATH"
+
+      - name: Verify Zig
+        run: |
+          which zig
+          zig version
+
+      - name: Build Ghostty.app (full build — zig invokes xcodebuild)
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Locate and package .app
+        run: |
+          set -e
+          APP=$(find . -name "Ghostty.app" -type d -maxdepth 5 2>/dev/null | head -1)
+          if [ -z "$APP" ]; then
+            echo "No Ghostty.app found anywhere" >&2
+            find macos -maxdepth 4 -type d 2>/dev/null | head -30 >&2
+            find zig-out -maxdepth 4 -type d 2>/dev/null | head -30 >&2
+            exit 1
+          fi
+          echo "Found $APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" Ghostty.app.zip
+          ls -lh Ghostty.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ghostty-kitty-clipboard
+          path: Ghostty.app.zip
+          retention-days: 14
